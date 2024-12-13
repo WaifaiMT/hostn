@@ -16,15 +16,15 @@ Ensure your project structure is organized:
 ```
 your-project/
 │
-├── server/           # Node.js backend
-│   ├── src/
-│   ├── package.json
-│   └── Dockerfile
+├── server/ # Node.js backend
+│ ├── src/
+│ ├── package.json
+│ └── Dockerfile
 │
-├── client/           # React frontend
-│   ├── src/
-│   ├── package.json
-│   └── Dockerfile
+├── client/ # React frontend
+│ ├── src/
+│ ├── package.json
+│ └── Dockerfile
 │
 └── .github/
     └── workflows/
@@ -39,34 +39,93 @@ your-project/
 ssh root@your_vps_ip
 ```
 
-2. Update system packages
+2. Clean and update system packages
 
 ```bash
-sudo apt update && sudo apt upgrade -y
+sudo apt clean all
+sudo apt update
+sudo apt dist-upgrade
 ```
 
-3. Install essential tools
+3. Remove default web directory
+
+```bash
+rm -rf /var/www/html
+```
+
+4. Install essential tools
+
+### when you don't have node install
 
 ```bash
 sudo apt install -y nodejs npm nginx certbot python3-certbot-nginx docker.io docker-compose git
 ```
 
-4. Create deployment user
+### if node and npm is already installed
+
+```bash
+sudo apt install -y nginx certbot python3-certbot-nginx docker.io docker-compose git
+```
+
+5. Create deployment user
 
 ```bash
 sudo adduser deployer
 sudo usermod -aG sudo,docker deployer
 ```
 
-## Step 3: Configure Nginx as Reverse Proxy
+## Step 3: Prepare Application Directory
+
+```bash
+mkdir -p /var/www/my-app/server
+mkdir -p /var/www/my-app/client
+```
+
+## Step 4: Clone Repository
+
+```bash
+cd /var/www/my-app
+git clone https://github.com/user/my-app.git
+cd my-app
+```
+
+## Step 5: Backend Setup
+
+```bash
+cd server
+npm install
+nano .env  # Configure environment variables
+```
+
+## Step 6: Frontend Setup
+
+```bash
+cd ../client
+npm install
+nano .env  # Configure environment variables
+npm run build
+```
+
+## Step 7: Deploy Frontend Build
+
+```bash
+rm -rf /var/www/my-app/client/*
+cp -r build/* /var/www/my-app/client/
+```
+
+## Step 8: Configure Nginx as Reverse Proxy
 
 Create Nginx configuration:
 
+```bash
+nano /etc/nginx/sites-available/my-app
+```
+
 ```nginx
-# /etc/nginx/sites-available/your-app
+# Frontend Configuration
 server {
     listen 80;
-    server_name yourdomain.com www.yourdomain.com;
+    server_name mydomain.com www.mydomain.com;
 
     location / {
         proxy_pass http://localhost:3000;  # React frontend
@@ -76,14 +135,25 @@ server {
         proxy_set_header Host $host;
         proxy_cache_bypass $http_upgrade;
     }
+}
 
-    location /api {
+# Backend Configuration
+server {
+    listen 80;
+    server_name api.mydomain.com;
+
+    location / {
         proxy_pass http://localhost:5000;  # Node.js backend
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
         proxy_set_header Host $host;
         proxy_cache_bypass $http_upgrade;
+
+        # CORS headers if needed
+        add_header 'Access-Control-Allow-Origin' 'https://mydomain.com';
+        add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS, PUT, DELETE';
+        add_header 'Access-Control-Allow-Headers' 'DNT,User-Agent,X-Requested-With,Content-Type,Accept,Authorization';
     }
 }
 ```
@@ -91,18 +161,46 @@ server {
 Enable the configuration:
 
 ```bash
-sudo ln -s /etc/nginx/sites-available/your-app /etc/nginx/sites-enabled/
+sudo ln -s /etc/nginx/sites-available/my-app /etc/nginx/sites-enabled/
 sudo nginx -t
 sudo systemctl restart nginx
 ```
 
-## Step 4: SSL Configuration with Certbot
+## Step 9: SSL Configuration with Certbot
 
 ```bash
-sudo certbot --nginx -d yourdomain.com -d www.yourdomain.com
+# Install SSL for frontend domain
+sudo certbot --nginx -d mydomain.com -d www.mydomain.com
+
+# Install SSL for backend API domain
+sudo certbot --nginx -d api.mydomain.com
 ```
 
-## Step 5: GitHub Actions Workflow
+Verify auto-renewal:
+
+```bash
+systemctl status certbot.timer
+```
+
+## Step 10: Process Management with PM2
+
+Install PM2:
+
+```bash
+sudo npm install -g pm2
+```
+
+Start applications:
+
+```bash
+# In server directory
+pm2 start npm --name "server-app" -- start
+
+# In client directory
+pm2 start npm --name "client-app" -- start
+```
+
+## Step 11: GitHub Actions Workflow
 
 Create `.github/workflows/deploy.yml`:
 
@@ -146,7 +244,7 @@ jobs:
           # Alternatively use SSH key
           # key: ${{ secrets.VPS_SSH_KEY }}
           script: |
-            cd /path/to/your/app
+            cd /var/www/my-app
             git pull origin main
 
             # Backend deployment
@@ -164,7 +262,7 @@ jobs:
             sudo nginx -t && sudo systemctl restart nginx
 ```
 
-## Step 6: GitHub Secrets Configuration
+## Step 12: GitHub Secrets Configuration
 
 In your GitHub repository:
 
@@ -175,17 +273,7 @@ In your GitHub repository:
    - `VPS_PASSWORD`: Deployment user password
    - `VPS_SSH_KEY`: SSH key (optional, more secure)
 
-## Step 7: PM2 Process Management
-
-Install PM2 globally on VPS:
-
-```bash
-sudo npm install -g pm2
-```
-
-## Step 8: Docker Containers (Optional)
-
-Create `Dockerfile` for both server and client:
+## Optional: Docker Containerization
 
 Server Dockerfile:
 
@@ -215,18 +303,27 @@ EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
 ```
 
+## CORS Configuration Example
+
+In your Node.js backend:
+
+```javascript
+const cors = require("cors");
+
+app.use(
+  cors({
+    origin: "https://mydomain.com",
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+```
+
 ## Troubleshooting
 
 - Check Nginx logs: `sudo tail -f /var/log/nginx/error.log`
 - Check PM2 logs: `pm2 logs`
 - Verify GitHub Actions workflow in repository Actions tab
-
-## Notes
-
-- Always keep your system and dependencies updated
-- Use strong, unique passwords
-- Consider using SSH key authentication instead of passwords
-- Regularly backup your data
 
 ## Security Best Practices
 
@@ -235,3 +332,11 @@ CMD ["nginx", "-g", "daemon off;"]
 3. Use HTTPS
 4. Keep all software updated
 5. Implement proper firewall rules
+6. Consider using SSH key authentication
+7. Regularly backup your data
+
+## Notes
+
+- Always keep your system and dependencies updated
+- Use strong, unique passwords
+- Regularly review and update your deployment configuration
